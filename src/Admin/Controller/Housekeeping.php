@@ -70,7 +70,8 @@ class Housekeeping extends Base
         }
 
         $this
-            ->setTitles(['Housekeeping'])
+            ->addBreadcrumb('Utilities')
+            ->addBreadcrumb('Housekeeping')
             ->setData('aRows', $aRows)
             ->setData('bCanExecute', userHasPermission(Permission\Execute::class))
             ->loadView('index');
@@ -104,7 +105,9 @@ class Housekeeping extends Base
         }
 
         $this
-            ->setTitles(['Housekeeping', 'Logs'])
+            ->addBreadcrumb('Utilities')
+            ->addBreadcrumb('Housekeeping', static::url())
+            ->addBreadcrumb('Logs')
             ->setData('aFiles', $aFiles)
             ->setData('sSelected', $sSelected)
             ->setData('sContents', $sContents)
