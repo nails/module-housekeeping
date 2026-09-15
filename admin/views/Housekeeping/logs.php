@@ -1,6 +1,6 @@
 <?php
 
-use Nails\Housekeeping\Admin\Controller\Housekeeping;
+use Nails\Admin\Housekeeping\Housekeeping;
 
 /**
  * @var string[] $aFiles
@@ -11,7 +11,7 @@ use Nails\Housekeeping\Admin\Controller\Housekeeping;
 ?>
 <div class="group-housekeeping logs">
     <p>
-        <a href="<?=Housekeeping::url()?>">&larr; Back to routines</a>
+        <a href="<?=siteUrl(Housekeeping::ADMIN_URL)?>">&larr; Back to routines</a>
     </p>
     <div class="row">
         <div class="col-md-3">
@@ -27,7 +27,7 @@ use Nails\Housekeeping\Admin\Controller\Housekeeping;
                             <?php if ($sName === $sSelected) { ?>
                                 <strong><?=htmlspecialchars($sName)?></strong>
                             <?php } else { ?>
-                                <a href="<?=Housekeeping::url('logs?file=' . urlencode($sName))?>">
+                                <a href="<?=siteUrl(Housekeeping::ADMIN_URL . '/logs') . '?file=' . urlencode($sName)?>">
                                     <?=htmlspecialchars($sName)?>
                                 </a>
                             <?php } ?>

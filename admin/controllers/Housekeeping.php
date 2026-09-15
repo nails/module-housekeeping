@@ -1,15 +1,15 @@
 <?php
 
-namespace Nails\Housekeeping\Admin\Controller;
+namespace Nails\Admin\Housekeeping;
 
 use Nails\Admin\Controller\Base;
 use Nails\Admin\Factory\Nav;
+use Nails\Admin\Helper;
 use Nails\Common\Exception\FactoryException;
 use Nails\Common\Exception\NailsException;
 use Nails\Common\Service\Input;
 use Nails\Components;
 use Nails\Factory;
-use Nails\Housekeeping\Admin\Permission;
 use Nails\Housekeeping\Constants;
 use Nails\Housekeeping\Interfaces\Routine;
 use Nails\Housekeeping\Service\Logger;
@@ -19,12 +19,16 @@ use Symfony\Component\Console\Output\NullOutput;
 
 class Housekeeping extends Base
 {
+    const PERMISSION_BROWSE  = 'admin:housekeeping:housekeeping:browse';
+    const PERMISSION_EXECUTE = 'admin:housekeeping:housekeeping:execute';
+    const ADMIN_URL          = 'admin/housekeeping/housekeeping';
+
     /**
      * @throws FactoryException
      */
     public static function announce(): Nav|array|null
     {
-        if (!userHasPermission(Permission\Browse::class)) {
+        if (!userHasPermission(self::PERMISSION_BROWSE)) {
             return null;
         }
 
@@ -39,13 +43,26 @@ class Housekeeping extends Base
     }
 
     /**
+     * @return array<string, string>
+     */
+    public static function permissions(): array
+    {
+        $aPermissions = parent::permissions();
+
+        $aPermissions['browse']  = 'Can browse housekeeping routines and logs';
+        $aPermissions['execute'] = 'Can run housekeeping routines';
+
+        return $aPermissions;
+    }
+
+    /**
      * @throws FactoryException
      * @throws NailsException
      * @throws ReflectionException
      */
     public function index(): void
     {
-        if (!userHasPermission(Permission\Browse::class)) {
+        if (!userHasPermission(self::PERMISSION_BROWSE)) {
             unauthorised();
         }
 
@@ -63,18 +80,17 @@ class Housekeeping extends Base
         foreach ($oOrchestrator->discover() as $oRoutine) {
             $oComponent = Components::detectClassComponent($oRoutine);
             $aRows[]    = [
-                'routine'     => $oRoutine,
-                'component'   => $oComponent->name ?? 'Unknown',
-                'last_run'    => $oOrchestrator->getLastRun($oRoutine->getKey()),
+                'routine'   => $oRoutine,
+                'component' => $oComponent->name ?? 'Unknown',
+                'last_run'  => $oOrchestrator->getLastRun($oRoutine->getKey()),
             ];
         }
 
-        $this
-            ->addBreadcrumb('Utilities')
-            ->addBreadcrumb('Housekeeping')
-            ->setData('aRows', $aRows)
-            ->setData('bCanExecute', userHasPermission(Permission\Execute::class))
-            ->loadView('index');
+        $this->data['page']->title = 'Housekeeping';
+        $this->data['aRows']       = $aRows;
+        $this->data['bCanExecute'] = userHasPermission(self::PERMISSION_EXECUTE);
+
+        Helper::loadView('index');
     }
 
     /**
@@ -82,7 +98,7 @@ class Housekeeping extends Base
      */
     public function logs(): void
     {
-        if (!userHasPermission(Permission\Browse::class)) {
+        if (!userHasPermission(self::PERMISSION_BROWSE)) {
             unauthorised();
         }
 
@@ -104,14 +120,12 @@ class Housekeeping extends Base
             $sContents = $oLogger->readLogTail($sSelected);
         }
 
-        $this
-            ->addBreadcrumb('Utilities')
-            ->addBreadcrumb('Housekeeping', static::url())
-            ->addBreadcrumb('Logs')
-            ->setData('aFiles', $aFiles)
-            ->setData('sSelected', $sSelected)
-            ->setData('sContents', $sContents)
-            ->loadView('logs');
+        $this->data['page']->title = 'Housekeeping: Logs';
+        $this->data['aFiles']      = $aFiles;
+        $this->data['sSelected']   = $sSelected;
+        $this->data['sContents']   = $sContents;
+
+        Helper::loadView('logs');
     }
 
     /**
@@ -121,14 +135,14 @@ class Housekeeping extends Base
      */
     private function handleRun(Orchestrator $oOrchestrator, string $sRoutine, bool $bDryRun): void
     {
-        if (!userHasPermission(Permission\Execute::class)) {
+        if (!userHasPermission(self::PERMISSION_EXECUTE)) {
             unauthorised();
         }
 
         $oMatched = $this->findRoutine($oOrchestrator, $sRoutine);
         if (!$oMatched instanceof Routine) {
             $this->oUserFeedback->error('Unknown housekeeping routine.');
-            redirect(static::url());
+            redirect(self::ADMIN_URL);
             return;
         }
 
@@ -152,7 +166,7 @@ class Housekeeping extends Base
             $this->oUserFeedback->error($sSummary . ' ' . $oResult->getMessage());
         }
 
-        redirect(static::url());
+        redirect(self::ADMIN_URL);
     }
 
     /**

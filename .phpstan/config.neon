@@ -11,7 +11,6 @@ parameters:
         - ../vendor/nails/common/src/Common/CodeIgniter/Core/Common.php
         - ../vendor/nails/module-auth/helpers/user.php
         - ../vendor/nails/module-auth/helpers/authUrls.php
-        - ../vendor/nails/module-admin/helpers/permission.php
         - ../vendor/nails/common/helpers/form.php
         - ../vendor/nails/module-admin/helpers/form.php
         - ../vendor/nails/module-admin/helpers/admin.php

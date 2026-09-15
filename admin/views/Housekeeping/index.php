@@ -1,6 +1,6 @@
 <?php
 
-use Nails\Housekeeping\Admin\Controller\Housekeeping;
+use Nails\Admin\Housekeeping\Housekeeping;
 use Nails\Housekeeping\Interfaces\Routine;
 
 /**
@@ -13,11 +13,11 @@ use Nails\Housekeeping\Interfaces\Routine;
     <p>
         Housekeeping routines remove expired data, files, and other residue on a schedule.
         Every removal is written to a dedicated log file.
-        <a href="<?=Housekeeping::url('logs')?>">View audit logs</a>
+        <a href="<?=siteUrl(Housekeeping::ADMIN_URL . '/logs')?>">View audit logs</a>
     </p>
     <div class="table-responsive">
         <table class="table table-striped table-hover table-bordered">
-            <thead class="table-dark">
+            <thead>
                 <tr>
                     <th>Routine</th>
                     <th>Component</th>
@@ -29,7 +29,7 @@ use Nails\Housekeeping\Interfaces\Routine;
                     <?php } ?>
                 </tr>
             </thead>
-            <tbody class="align-middle">
+            <tbody>
                 <?php
                 if (empty($aRows)) {
                     ?>
@@ -56,9 +56,9 @@ use Nails\Housekeeping\Interfaces\Routine;
                             <td><code><?=htmlspecialchars($oRoutine->getCronExpression())?></code></td>
                             <td class="text-center">
                                 <?php if ($oRoutine->isEnabled()) { ?>
-                                    <span class="badge bg-success">Yes</span>
+                                    <span class="label label-success">Yes</span>
                                 <?php } else { ?>
-                                    <span class="badge bg-secondary">No</span>
+                                    <span class="label label-default">No</span>
                                 <?php } ?>
                             </td>
                             <td>
@@ -79,13 +79,13 @@ use Nails\Housekeeping\Interfaces\Routine;
                             </td>
                             <?php if ($bCanExecute) { ?>
                                 <td class="actions">
-                                    <?=form_open(Housekeeping::url(), ['style' => 'display:inline-block'])?>
+                                    <?=form_open(Housekeeping::ADMIN_URL, ['style' => 'display:inline-block'])?>
                                         <input type="hidden" name="run" value="1">
                                         <input type="hidden" name="routine" value="<?=htmlspecialchars($oRoutine->getKey())?>">
                                         <input type="hidden" name="dry_run" value="1">
                                         <button type="submit" class="btn btn-xs btn-default">Dry run</button>
                                     <?=form_close()?>
-                                    <?=form_open(Housekeeping::url(), ['style' => 'display:inline-block'])?>
+                                    <?=form_open(Housekeeping::ADMIN_URL, ['style' => 'display:inline-block'])?>
                                         <input type="hidden" name="run" value="1">
                                         <input type="hidden" name="routine" value="<?=htmlspecialchars($oRoutine->getKey())?>">
                                         <button
