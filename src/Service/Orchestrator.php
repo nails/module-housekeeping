@@ -42,13 +42,16 @@ class Orchestrator
                 ->whichCanBeInstantiated();
 
             foreach ($aClasses as $sClass) {
-                $aRoutines[] = new $sClass();
+                if (!is_string($sClass) || !is_a($sClass, Routine::class, true)) {
+                    continue;
+                }
+                $aRoutines[$sClass] = new $sClass();
             }
         }
 
-        usort($aRoutines, static fn(Routine $a, Routine $b) => $a->getKey() <=> $b->getKey());
+        ksort($aRoutines);
 
-        return $aRoutines;
+        return array_values($aRoutines);
     }
 
     /**
@@ -221,7 +224,18 @@ class Orchestrator
     public function getLastRun(string $sClass): ?array
     {
         $mValue = appSetting($this->lastRunKey($sClass), Constants::MODULE_SLUG);
-        return is_array($mValue) ? $mValue : null;
+        if (!is_array($mValue) || !isset($mValue['at'], $mValue['processed'], $mValue['failed'], $mValue['success'], $mValue['duration_ms'], $mValue['dry_run'])) {
+            return null;
+        }
+
+        return [
+            'at'          => (string) $mValue['at'],
+            'processed'   => (int) $mValue['processed'],
+            'failed'      => (int) $mValue['failed'],
+            'success'     => (bool) $mValue['success'],
+            'duration_ms' => (int) $mValue['duration_ms'],
+            'dry_run'     => (bool) $mValue['dry_run'],
+        ];
     }
 
     public function lastRunKey(string $sClass): string

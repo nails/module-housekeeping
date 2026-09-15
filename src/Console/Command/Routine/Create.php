@@ -129,7 +129,12 @@ class Create extends BaseMaker
      */
     protected function generateClassName(array $aClassBits): string
     {
-        return array_pop($aClassBits);
+        $sClassName = array_pop($aClassBits);
+        if ($sClassName === null || $sClassName === '') {
+            throw new HousekeepingException('Invalid routine class name');
+        }
+
+        return $sClassName;
     }
 
     /**
@@ -147,6 +152,10 @@ class Create extends BaseMaker
     protected function generateFilePath(array $aClassBits): string
     {
         $sClassName = array_pop($aClassBits);
+        if ($sClassName === null || $sClassName === '') {
+            throw new HousekeepingException('Invalid routine class name');
+        }
+
         return implode(
             DIRECTORY_SEPARATOR,
             array_map(
