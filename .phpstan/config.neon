@@ -1,0 +1,15 @@
+parameters:
+    level: 8
+    paths:
+        - ../src
+        - ../tests
+    bootstrapFiles:
+        - constants.php
+    scanFiles:
+        - ../vendor/nails/common/helpers/url.php
+        - ../vendor/nails/common/helpers/app_setting.php
+        - ../vendor/nails/module-auth/helpers/user.php
+        - ../vendor/nails/module-auth/helpers/authUrls.php
+        - ../vendor/nails/module-admin/helpers/permission.php
+        - ../vendor/nails/common/helpers/form.php
+        - ../vendor/nails/module-admin/helpers/admin.php
