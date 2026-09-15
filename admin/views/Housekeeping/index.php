@@ -16,7 +16,7 @@ use Nails\Housekeeping\Interfaces\Routine;
         <a href="<?=siteUrl(Housekeeping::ADMIN_URL . '/logs')?>">View audit logs</a>
     </p>
     <div class="table-responsive">
-        <table class="table table-striped table-hover table-bordered">
+        <table>
             <thead>
                 <tr>
                     <th>Routine</th>
