@@ -47,7 +47,7 @@ class {{CLASS_NAME}} extends Base
         $oContext->log('START custom work');
 
         // Perform cleanup here. Use Factory::service('Deleter', \Nails\Housekeeping\Constants::MODULE_SLUG)
-        // or one of the official traits (DeletesModelRows, DeletesFiles, TruncatesTable).
+        // or one of the official traits (DeletesModelRows, DeletesFiles, ArchivesFiles, TruncatesTable).
 
         return Result::ok();
     }
