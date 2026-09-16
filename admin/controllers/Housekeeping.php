@@ -66,15 +66,8 @@ class Housekeeping extends Base
             unauthorised();
         }
 
-        /** @var Input $oInput */
-        $oInput = Factory::service('Input');
         /** @var Orchestrator $oOrchestrator */
         $oOrchestrator = Factory::service('Orchestrator', Constants::MODULE_SLUG);
-
-        if ($oInput::post('run')) {
-            $this->handleRun($oOrchestrator, (string) $oInput::post('routine'), (bool) $oInput::post('dry_run'));
-            return;
-        }
 
         $aRows = [];
         foreach ($oOrchestrator->discover() as $oRoutine) {
@@ -85,6 +78,11 @@ class Housekeeping extends Base
                 'last_run'  => $oOrchestrator->getLastRun($oRoutine->getKey()),
             ];
         }
+
+        Helper::addHeaderButton(
+            self::ADMIN_URL . '/logs',
+            'View Audit Logs'
+        );
 
         $this->data['page']->title = 'Housekeeping';
         $this->data['aRows']       = $aRows;
@@ -133,11 +131,19 @@ class Housekeeping extends Base
      * @throws NailsException
      * @throws ReflectionException
      */
-    private function handleRun(Orchestrator $oOrchestrator, string $sRoutine, bool $bDryRun): void
+    public function run(): void
     {
         if (!userHasPermission(self::PERMISSION_EXECUTE)) {
             unauthorised();
         }
+
+        /** @var Input $oInput */
+        $oInput = Factory::service('Input');
+        /** @var Orchestrator $oOrchestrator */
+        $oOrchestrator = Factory::service('Orchestrator', Constants::MODULE_SLUG);
+
+        $sRoutine = (string) $oInput::get('routine');
+        $bDryRun  = (bool) $oInput::get('dry_run');
 
         $oMatched = $this->findRoutine($oOrchestrator, $sRoutine);
         if (!$oMatched instanceof Routine) {

@@ -5,40 +5,46 @@ use Nails\Housekeeping\Interfaces\Routine;
 
 /**
  * @var array<int, array{routine: Routine, component: string, last_run: array<string, mixed>|null}> $aRows
- * @var bool $bCanExecute
+ * @var bool                                                                                        $bCanExecute
  */
 
 ?>
 <div class="group-housekeeping browse">
     <p>
         Housekeeping routines remove expired data, files, and other residue on a schedule.
-        Every removal is written to a dedicated log file.
-        <a href="<?=siteUrl(Housekeeping::ADMIN_URL . '/logs')?>">View audit logs</a>
     </p>
     <div class="table-responsive">
         <table>
             <thead>
                 <tr>
                     <th>Routine</th>
-                    <th>Component</th>
-                    <th>Schedule</th>
+                    <th class="text-center">Schedule</th>
                     <th>Enabled</th>
                     <th>Last run</th>
-                    <?php if ($bCanExecute) { ?>
+                    <?php
+
+                    if ($bCanExecute) {
+                        ?>
                         <th class="actions" style="width:220px;">Actions</th>
-                    <?php } ?>
+                        <?php
+                    }
+
+                    ?>
                 </tr>
             </thead>
             <tbody>
                 <?php
+
                 if (empty($aRows)) {
+
                     ?>
                     <tr>
-                        <td colspan="<?=$bCanExecute ? 6 : 5?>" class="no-data">
+                        <td colspan="<?=$bCanExecute ? 5 : 4?>" class="no-data">
                             No housekeeping routines have been discovered.
                         </td>
                     </tr>
                     <?php
+
                 } else {
                     foreach ($aRows as $aRow) {
                         $oRoutine = $aRow['routine'];
@@ -47,24 +53,31 @@ use Nails\Housekeeping\Interfaces\Routine;
                         <tr>
                             <td>
                                 <strong><?=htmlspecialchars($oRoutine->getLabel())?></strong>
-                                <?php if ($oRoutine->getDescription() !== '' && $oRoutine->getDescription() !== $oRoutine->getLabel()) { ?>
-                                    <br><small class="text-muted"><?=htmlspecialchars($oRoutine->getDescription())?></small>
-                                <?php } ?>
-                                <br><small><code><?=htmlspecialchars($oRoutine->getKey())?></code></small>
+                                <?php
+
+                                if ($oRoutine->getDescription() !== '' && $oRoutine->getDescription() !== $oRoutine->getLabel()) {
+                                    ?>
+                                    <small class="text-muted"><?=htmlspecialchars($oRoutine->getDescription())?></small>
+                                    <?php
+                                }
+
+                                ?>
+                                <small class="text-muted">
+                                    <code><?=htmlspecialchars($aRow['component'])?></code>
+                                    &rsaquo;
+                                    <code><?=htmlspecialchars($oRoutine->getKey())?></code>
+                                </small>
                             </td>
-                            <td><?=htmlspecialchars($aRow['component'])?></td>
-                            <td><code><?=htmlspecialchars($oRoutine->getCronExpression())?></code></td>
                             <td class="text-center">
-                                <?php if ($oRoutine->isEnabled()) { ?>
-                                    <span class="label label-success">Yes</span>
-                                <?php } else { ?>
-                                    <span class="label label-default">No</span>
-                                <?php } ?>
+                                <code><?=htmlspecialchars($oRoutine->getCronExpression())?></code>
                             </td>
+                            <?=\Nails\Admin\Helper::loadBoolCell($oRoutine->isEnabled())?>
                             <td>
                                 <?php
+
                                 if (empty($aLastRun['at'])) {
-                                    echo '<span class="text-muted">Never</span>';
+                                    echo '<span class="text-muted">&mdash;</span>';
+
                                 } else {
                                     echo htmlspecialchars((string) $aLastRun['at']);
                                     echo '<br><small>';
@@ -75,31 +88,43 @@ use Nails\Housekeeping\Interfaces\Routine;
                                     }
                                     echo '</small>';
                                 }
+
                                 ?>
                             </td>
-                            <?php if ($bCanExecute) { ?>
+                            <?php
+
+                            if ($bCanExecute) {
+
+                                ?>
                                 <td class="actions">
-                                    <?=form_open(Housekeeping::ADMIN_URL, ['style' => 'display:inline-block'])?>
-                                        <input type="hidden" name="run" value="1">
-                                        <input type="hidden" name="routine" value="<?=htmlspecialchars($oRoutine->getKey())?>">
-                                        <input type="hidden" name="dry_run" value="1">
-                                        <button type="submit" class="btn btn-xs btn-default">Dry run</button>
-                                    <?=form_close()?>
-                                    <?=form_open(Housekeeping::ADMIN_URL, ['style' => 'display:inline-block'])?>
-                                        <input type="hidden" name="run" value="1">
-                                        <input type="hidden" name="routine" value="<?=htmlspecialchars($oRoutine->getKey())?>">
-                                        <button
-                                            type="submit"
-                                            class="btn btn-xs btn-danger"
-                                            onclick="return confirm('Run <?=htmlspecialchars($oRoutine->getLabel(), ENT_QUOTES)?> now? This will permanently remove matching items.');"
-                                        >Run now</button>
-                                    <?=form_close()?>
+                                    <?php
+
+                                    echo anchor(
+                                        Housekeeping::ADMIN_URL . '/run?run=1&dry_run=1&routine=' . urlencode($oRoutine->getKey()),
+                                        'Dry Run',
+                                        'class="btn btn-xs btn-primary"'
+                                    );
+
+                                    echo anchor(
+                                        Housekeeping::ADMIN_URL . '/run?run=1&routine=' . urlencode($oRoutine->getKey()),
+                                        'Run now',
+                                        sprintf(
+                                            'class="btn btn-xs btn-danger confirm" data-body="Run %s now? This will permanently remove matching items."',
+                                            htmlspecialchars($oRoutine->getLabel(), ENT_QUOTES)
+                                        )
+                                    );
+
+                                    ?>
                                 </td>
-                            <?php } ?>
+                                <?php
+                            }
+
+                            ?>
                         </tr>
                         <?php
                     }
                 }
+
                 ?>
             </tbody>
         </table>
