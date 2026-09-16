@@ -4,6 +4,7 @@ namespace Nails\Housekeeping\Admin\Controller;
 
 use Nails\Admin\Controller\Base;
 use Nails\Admin\Factory\Nav;
+use Nails\Admin\Helper;
 use Nails\Common\Exception\FactoryException;
 use Nails\Common\Exception\NailsException;
 use Nails\Common\Service\Input;
@@ -54,20 +55,20 @@ class Housekeeping extends Base
         /** @var Orchestrator $oOrchestrator */
         $oOrchestrator = Factory::service('Orchestrator', Constants::MODULE_SLUG);
 
-        if ($oInput::post('run')) {
-            $this->handleRun($oOrchestrator, (string) $oInput::post('routine'), (bool) $oInput::post('dry_run'));
-            return;
-        }
-
         $aRows = [];
         foreach ($oOrchestrator->discover() as $oRoutine) {
             $oComponent = Components::detectClassComponent($oRoutine);
             $aRows[]    = [
-                'routine'     => $oRoutine,
-                'component'   => $oComponent->name ?? 'Unknown',
-                'last_run'    => $oOrchestrator->getLastRun($oRoutine->getKey()),
+                'routine'   => $oRoutine,
+                'component' => $oComponent->name ?? 'Unknown',
+                'last_run'  => $oOrchestrator->getLastRun($oRoutine->getKey()),
             ];
         }
+
+        Helper::addHeaderButton(
+            static::url('logs'),
+            'View Audit Logs'
+        );
 
         $this
             ->addBreadcrumb('Utilities')
@@ -119,11 +120,19 @@ class Housekeeping extends Base
      * @throws NailsException
      * @throws ReflectionException
      */
-    private function handleRun(Orchestrator $oOrchestrator, string $sRoutine, bool $bDryRun): void
+    public function run(): void
     {
         if (!userHasPermission(Permission\Execute::class)) {
             unauthorised();
         }
+
+        /** @var Input $oInput */
+        $oInput = Factory::service('Input');
+        /** @var Orchestrator $oOrchestrator */
+        $oOrchestrator = Factory::service('Orchestrator', Constants::MODULE_SLUG);
+
+        $sRoutine = (string) $oInput::get('routine');
+        $bDryRun  = (bool) $oInput::get('dry_run');
 
         $oMatched = $this->findRoutine($oOrchestrator, $sRoutine);
         if (!$oMatched instanceof Routine) {
