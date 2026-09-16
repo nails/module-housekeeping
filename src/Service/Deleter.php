@@ -108,20 +108,19 @@ class Deleter
     /**
      * Delete files matching a glob under a directory that are older than N days.
      *
+     * @param string|string[] $mPattern
+     *
      * @throws FactoryException
      * @throws HousekeepingException
      */
     public function deleteFiles(
         Context $oContext,
         string $sDirectory,
-        string $sPattern = '*.php',
+        string|array $mPattern = '*.php',
         int $iOlderThanDays = 180,
     ): Result {
-        $sDirectory = rtrim($sDirectory, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
-
-        if (!is_dir($sDirectory)) {
-            throw new HousekeepingException(sprintf('Directory does not exist: %s', $sDirectory));
-        }
+        $sDirectory = $this->normaliseDirectory($sDirectory);
+        $sPattern   = $this->patternLabel($mPattern);
 
         $oContext
             ->writeln(sprintf(
@@ -138,37 +137,17 @@ class Deleter
                 $oContext->isDryRun() ? 'true' : 'false'
             ));
 
-        /** @var \DateTime $oNow */
-        $oNow       = Factory::factory('DateTime');
+        $oNow       = $this->now();
         $iProcessed = 0;
         $iFailed    = 0;
 
-        $oFiles = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($sDirectory, RecursiveDirectoryIterator::SKIP_DOTS),
-            RecursiveIteratorIterator::CHILD_FIRST
-        );
-
-        /** @var SplFileInfo $oFile */
-        foreach ($oFiles as $oFile) {
-            if (!$oFile->isFile()) {
+        foreach ($this->files($sDirectory) as $oFile) {
+            if (!$this->shouldProcessFile($oFile, $mPattern, $iOlderThanDays, $oNow)) {
                 continue;
             }
 
             $sFileName = $oFile->getFilename();
-            if (!fnmatch($sPattern, $sFileName)) {
-                continue;
-            }
-
-            $oModified = \DateTime::createFromFormat('U', (string) $oFile->getMTime());
-            if ($oModified === false) {
-                continue;
-            }
-
-            if ($iOlderThanDays > 0 && $oNow->diff($oModified, true)->days <= $iOlderThanDays) {
-                continue;
-            }
-
-            $sPath = $oFile->getRealPath() ?: $oFile->getPathname();
+            $sPath     = $oFile->getRealPath() ?: $oFile->getPathname();
             $oContext->log('UNLINK ' . $sPath);
             $oContext->writeln(' ↳ Removing <comment>' . $sFileName . '</comment>');
 
@@ -192,6 +171,88 @@ class Deleter
 
         if ($iFailed > 0) {
             return Result::fail('Failed to unlink ' . $iFailed . ' file(s)', $iProcessed, $iFailed);
+        }
+
+        return Result::ok($iProcessed);
+    }
+
+    /**
+     * Gzip files matching a glob under a directory that are older than N days.
+     *
+     * Original mtime is copied onto the archive so a later retention pass still
+     * sees the file's real age. Already-compressed files (those ending in the
+     * suffix) are skipped.
+     *
+     * @param string|string[] $mPattern
+     *
+     * @throws FactoryException
+     * @throws HousekeepingException
+     */
+    public function archiveFiles(
+        Context $oContext,
+        string $sDirectory,
+        string|array $mPattern = '*.php',
+        int $iOlderThanDays = 14,
+        string $sSuffix = '.gz',
+    ): Result {
+        if (!function_exists('gzopen')) {
+            throw new HousekeepingException('The zlib extension is required to archive files');
+        }
+
+        $sDirectory = $this->normaliseDirectory($sDirectory);
+        $sSuffix    = $this->normaliseSuffix($sSuffix);
+        $sPattern   = $this->patternLabel($mPattern);
+
+        $oContext
+            ->writeln(sprintf(
+                'Archiving <comment>%s</comment> (pattern <comment>%s</comment>, older than <comment>%d</comment> days, suffix <comment>%s</comment>)',
+                $sDirectory,
+                $sPattern,
+                $iOlderThanDays,
+                $sSuffix
+            ))
+            ->log(sprintf(
+                'DIRECTORY %s pattern=%s older_than_days=%d suffix=%s dry_run=%s',
+                $sDirectory,
+                $sPattern,
+                $iOlderThanDays,
+                $sSuffix,
+                $oContext->isDryRun() ? 'true' : 'false'
+            ));
+
+        $oNow       = $this->now();
+        $iProcessed = 0;
+        $iFailed    = 0;
+
+        foreach ($this->files($sDirectory) as $oFile) {
+            $sFileName = $oFile->getFilename();
+            if (str_ends_with($sFileName, $sSuffix)) {
+                continue;
+            }
+
+            if (!$this->shouldProcessFile($oFile, $mPattern, $iOlderThanDays, $oNow)) {
+                continue;
+            }
+
+            $sPath = $oFile->getRealPath() ?: $oFile->getPathname();
+            $sDest = $sPath . $sSuffix;
+
+            if (!$this->archiveOne($oContext, $oFile, $sPath, $sDest)) {
+                $iFailed++;
+                continue;
+            }
+
+            $iProcessed++;
+        }
+
+        $oContext->writeln(sprintf(
+            '<comment>%s</comment> files %s',
+            number_format($iProcessed),
+            $oContext->isDryRun() ? 'would be archived' : 'were archived'
+        ));
+
+        if ($iFailed > 0) {
+            return Result::fail('Failed to archive ' . $iFailed . ' file(s)', $iProcessed, $iFailed);
         }
 
         return Result::ok($iProcessed);
@@ -226,6 +287,192 @@ class Deleter
         }
 
         return Result::ok($iCount);
+    }
+
+    /**
+     * @throws FactoryException
+     */
+    protected function now(): \DateTime
+    {
+        /** @var \DateTime $oNow */
+        $oNow = Factory::factory('DateTime');
+        return $oNow;
+    }
+
+    /**
+     * @throws HousekeepingException
+     */
+    private function normaliseDirectory(string $sDirectory): string
+    {
+        $sDirectory = rtrim($sDirectory, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+
+        if (!is_dir($sDirectory)) {
+            throw new HousekeepingException(sprintf('Directory does not exist: %s', $sDirectory));
+        }
+
+        return $sDirectory;
+    }
+
+    /**
+     * @throws HousekeepingException
+     */
+    private function normaliseSuffix(string $sSuffix): string
+    {
+        $sSuffix = ltrim($sSuffix, '.');
+        if ($sSuffix === '') {
+            throw new HousekeepingException('Archive suffix must not be empty');
+        }
+
+        return '.' . $sSuffix;
+    }
+
+    /**
+     * @param string|string[] $mPattern
+     */
+    private function patternLabel(string|array $mPattern): string
+    {
+        return implode(',', (array) $mPattern);
+    }
+
+    /**
+     * @return \Generator<SplFileInfo>
+     */
+    private function files(string $sDirectory): \Generator
+    {
+        $oFiles = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($sDirectory, RecursiveDirectoryIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+
+        /** @var SplFileInfo $oFile */
+        foreach ($oFiles as $oFile) {
+            if ($oFile->isFile()) {
+                yield $oFile;
+            }
+        }
+    }
+
+    /**
+     * @param string|string[] $mPattern
+     */
+    private function shouldProcessFile(
+        SplFileInfo $oFile,
+        string|array $mPattern,
+        int $iOlderThanDays,
+        \DateTimeInterface $oNow,
+    ): bool {
+        if (!$this->filenameMatches($oFile->getFilename(), $mPattern)) {
+            return false;
+        }
+
+        $oModified = \DateTime::createFromFormat('U', (string) $oFile->getMTime());
+        if ($oModified === false) {
+            return false;
+        }
+
+        if ($iOlderThanDays > 0 && $oNow->diff($oModified, true)->days <= $iOlderThanDays) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param string|string[] $mPattern
+     */
+    private function filenameMatches(string $sFileName, string|array $mPattern): bool
+    {
+        foreach ((array) $mPattern as $sPattern) {
+            if (fnmatch($sPattern, $sFileName)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Gzip $sPath to $sDest, preserve mtime, then unlink the original.
+     * If $sDest already exists from a previous interrupted run, just unlink the original.
+     */
+    private function archiveOne(
+        Context $oContext,
+        SplFileInfo $oFile,
+        string $sPath,
+        string $sDest,
+    ): bool {
+        $sFileName      = $oFile->getFilename();
+        $bAlreadyExists = is_file($sDest) && (int) filesize($sDest) > 0;
+
+        $oContext->log(sprintf(
+            'ARCHIVE %s -> %s%s',
+            $sPath,
+            $sDest,
+            $bAlreadyExists ? ' already_exists=true' : ''
+        ));
+        $oContext->writeln(' ↳ Compressing <comment>' . $sFileName . '</comment>');
+
+        if ($oContext->isDryRun()) {
+            return true;
+        }
+
+        if ($bAlreadyExists) {
+            if (!@unlink($sPath)) {
+                $oContext->log('ERROR failed to unlink ' . $sPath);
+                $oContext->writeln('   <error>failed</error>');
+                return false;
+            }
+            return true;
+        }
+
+        if (is_file($sDest)) {
+            @unlink($sDest);
+        }
+
+        $iMTime = $oFile->getMTime();
+        $iPerms = $oFile->getPerms();
+
+        if (!$this->gzipFile($sPath, $sDest)) {
+            if (is_file($sDest)) {
+                @unlink($sDest);
+            }
+            $oContext->log('ERROR failed to compress ' . $sPath);
+            $oContext->writeln('   <error>failed</error>');
+            return false;
+        }
+
+        if (is_int($iPerms)) {
+            @chmod($sDest, $iPerms & 0777);
+        }
+        @touch($sDest, $iMTime);
+
+        if (!@unlink($sPath)) {
+            $oContext->log('ERROR failed to unlink ' . $sPath);
+            $oContext->writeln('   <error>failed</error>');
+            return false;
+        }
+
+        return true;
+    }
+
+    private function gzipFile(string $sSource, string $sDest): bool
+    {
+        $mIn = fopen($sSource, 'rb');
+        if ($mIn === false) {
+            return false;
+        }
+
+        $mOut = gzopen($sDest, 'wb6');
+        if ($mOut === false) {
+            fclose($mIn);
+            return false;
+        }
+
+        $iCopied = stream_copy_to_stream($mIn, $mOut);
+        fclose($mIn);
+        gzclose($mOut);
+
+        return $iCopied !== false;
     }
 
     /**

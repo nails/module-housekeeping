@@ -99,7 +99,10 @@ class Logger
             return [];
         }
 
-        $aFiles = glob($sDir . 'housekeeping-*.php') ?: [];
+        $aFiles = array_merge(
+            glob($sDir . 'housekeeping-*.php') ?: [],
+            glob($sDir . 'housekeeping-*.php.gz') ?: []
+        );
         rsort($aFiles);
 
         return $aFiles;
@@ -111,13 +114,17 @@ class Logger
     public function readLogTail(string $sFileName, int $iBytes = 102400): string
     {
         $sFileName = basename($sFileName);
-        if (!preg_match('/^housekeeping-\d{4}-\d{2}-\d{2}\.php$/', $sFileName)) {
+        if (!preg_match('/^housekeeping-\d{4}-\d{2}-\d{2}\.php(\.gz)?$/', $sFileName)) {
             return '';
         }
 
         $sPath = $this->oLogger->getDir() . $sFileName;
         if (!is_file($sPath)) {
             return '';
+        }
+
+        if (str_ends_with($sFileName, '.gz')) {
+            return $this->readGzippedLogTail($sPath, $iBytes);
         }
 
         $iSize = filesize($sPath);
@@ -135,9 +142,28 @@ class Logger
         $sContents = (string) stream_get_contents($oHandle);
         fclose($oHandle);
 
+        return $this->formatLogTail($sContents, $iStart > 0);
+    }
+
+    private function readGzippedLogTail(string $sPath, int $iBytes): string
+    {
+        $sDecoded = gzdecode((string) file_get_contents($sPath));
+        if ($sDecoded === false || $sDecoded === '') {
+            return '';
+        }
+
+        $iLength    = strlen($sDecoded);
+        $bTruncated = $iLength > $iBytes;
+        $sContents  = $bTruncated ? substr($sDecoded, -$iBytes) : $sDecoded;
+
+        return $this->formatLogTail($sContents, $bTruncated);
+    }
+
+    private function formatLogTail(string $sContents, bool $bTruncated): string
+    {
         $sContents = preg_replace('/^<\?php die\(\'Unauthorised\'\); \?>\s*/', '', $sContents) ?? $sContents;
 
-        if ($iStart > 0) {
+        if ($bTruncated) {
             $iFirstNewline = strpos($sContents, "\n");
             if ($iFirstNewline !== false) {
                 $sContents = substr($sContents, $iFirstNewline + 1);

@@ -7,6 +7,7 @@
     "prefer-stable": true,
     "require": {
         "php": ">=8.3",
+        "ext-zlib": "*",
         "nails/common": "dev-feature/pre-new-admin",
         "nails/module-console": "dev-feature/pre-new-admin",
         "nails/module-cron": "dev-feature/pre-new-admin"
