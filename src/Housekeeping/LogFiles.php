@@ -12,9 +12,11 @@ class LogFiles extends Base
 {
     use DeletesFiles;
 
-    const LABEL           = 'Log files';
-    const DESCRIPTION     = 'Deletes log files older than the configured retention period';
-    const CRON_EXPRESSION = '0 0 * * *';
+    const LABEL                  = 'Log files';
+    const DESCRIPTION            = 'Deletes log files older than the configured retention period, including compressed archives';
+    const CRON_EXPRESSION        = '0 0 * * *';
+    const CONFIG_RETENTION_DAYS  = 'LOG_RETENTION';
+    const DEFAULT_RETENTION_DAYS = 180;
 
     protected function directory(): string
     {
@@ -23,13 +25,16 @@ class LogFiles extends Base
         return $oLogger->getDir();
     }
 
-    protected function pattern(): string
+    /**
+     * @return string|string[]
+     */
+    protected function pattern(): string|array
     {
-        return '*.php';
+        return ['*.php', '*.php.gz'];
     }
 
     protected function olderThanDays(): int
     {
-        return (int) Config::get('LOG_RETENTION', 180);
+        return (int) Config::get(static::CONFIG_RETENTION_DAYS, static::DEFAULT_RETENTION_DAYS);
     }
 }
