@@ -15,7 +15,7 @@ use Nails\Housekeeping\Admin\Controller\Housekeeping;
     </p>
     <hr>
     <div class="table-responsive">
-        <table class="table table-striped table-hover table-bordered">
+        <table class="table table-striped table-hover">
             <thead class="table-dark">
                 <tr>
                     <th style="width:300px;">File</th>
