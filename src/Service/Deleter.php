@@ -49,15 +49,19 @@ class Deleter
         $aAuditColumns = array_values(array_unique(array_merge([$sIdColumn], $aAuditColumns)));
         $iProcessed    = 0;
         $sTable        = $oModel->getTableName();
-        $iPage         = 1;
+        $iLastId       = 0;
 
         $oContext
             ->writeln(sprintf('Deleting from <comment>%s</comment> in batches of %d', $sTable, $iBatchSize))
             ->log(sprintf('TABLE %s batch_size=%d dry_run=%s', $sTable, $iBatchSize, $oContext->isDryRun() ? 'true' : 'false'));
 
         while (true) {
-            $aRows = $oModel->getAll($iPage, $iBatchSize, [
-                'where'  => $aWhere,
+            if ($oContext->shouldStop()) {
+                return $oContext->abort($iProcessed);
+            }
+
+            $aRows = $oModel->getAll(1, $iBatchSize, [
+                'where'  => array_merge($aWhere, [[$sIdColumn . ' >', $iLastId]]),
                 'sort'   => [[$sIdColumn, 'asc']],
                 'select' => $aAuditColumns,
             ]);
@@ -68,8 +72,9 @@ class Deleter
 
             $aIds = [];
             foreach ($aRows as $oRow) {
-                $iId    = (int) ($oRow->{$sIdColumn} ?? 0);
-                $aIds[] = $iId;
+                $iId     = (int) ($oRow->{$sIdColumn} ?? 0);
+                $iLastId = $iId;
+                $aIds[]  = $iId;
                 $oContext->log('DELETE ' . $this->formatAudit($oRow, $aAuditColumns));
                 $oContext->writeln(' ↳ ' . $this->formatAudit($oRow, $aAuditColumns));
             }
@@ -80,9 +85,6 @@ class Deleter
                     $oContext->log('ERROR ' . $sError);
                     return Result::fail($sError, $iProcessed, count($aIds));
                 }
-                // Next fetch stays on page 1 because the previous rows are gone
-            } else {
-                $iPage++;
             }
 
             $iProcessed += count($aIds);
