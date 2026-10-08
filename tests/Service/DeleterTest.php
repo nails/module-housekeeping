@@ -2,10 +2,12 @@
 
 namespace Tests\Housekeeping\Service;
 
+use Nails\Common\Model\Base as ModelBase;
 use Nails\Housekeeping\Exception\HousekeepingException;
 use Nails\Housekeeping\Routine\Context;
 use Nails\Housekeeping\Service\Deleter;
 use Nails\Housekeeping\Service\Logger;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 
 class TestableDeleter extends Deleter
@@ -182,6 +184,71 @@ class DeleterTest extends TestCase
         );
     }
 
+    public function test_delete_rows_uses_a_keyset_and_terminates_on_dry_run(): void
+    {
+        $aPages = [];
+        $oModel = $this->rowModel($this->rows(1, 2, 3), $aPages);
+        $oModel->expects($this->never())->method('deleteMany');
+
+        $oResult = $this->deleter()->deleteRows(
+            $this->context(true),
+            $oModel,
+            [['created <', '2020-01-01']],
+            ['id'],
+            2
+        );
+
+        self::assertTrue($oResult->isSuccess());
+        self::assertSame(3, $oResult->getProcessed());
+        self::assertSame([0, 2, 3], $aPages);
+    }
+
+    public function test_delete_rows_does_not_refetch_a_row_after_delete_many_fails(): void
+    {
+        $aPages = [];
+        $oModel = $this->rowModel($this->rows(1, 2), $aPages);
+        $oModel->expects($this->once())->method('deleteMany')->willReturn(false);
+        $oModel->method('getErrors')->willReturn(['constraint failed']);
+
+        $oResult = $this->deleter()->deleteRows(
+            $this->context(),
+            $oModel,
+            [['created <', '2020-01-01']],
+            ['id'],
+            2
+        );
+
+        self::assertFalse($oResult->isSuccess());
+        self::assertSame(0, $oResult->getProcessed());
+        self::assertSame(2, $oResult->getFailed());
+        self::assertSame([0], $aPages);
+    }
+
+    public function test_delete_rows_aborts_when_the_budget_is_exceeded(): void
+    {
+        $aPages = [];
+        $aLogs  = [];
+        $oModel = $this->rowModel($this->rows(1, 2, 3), $aPages);
+        $oModel
+            ->expects($this->exactly(2))
+            ->method('deleteMany')
+            ->willReturn(true);
+
+        $oResult = $this->deleter()->deleteRows(
+            $this->stoppingContext($aLogs),
+            $oModel,
+            [['created <', '2020-01-01']],
+            ['id'],
+            2
+        );
+
+        self::assertFalse($oResult->isSuccess());
+        self::assertSame(3, $oResult->getProcessed());
+        self::assertSame('Routine exceeded time budget', $oResult->getMessage());
+        self::assertContains('ABORTED', $aLogs);
+        self::assertSame([0, 2], $aPages);
+    }
+
     private function deleter(): TestableDeleter
     {
         return new TestableDeleter($this->oNow);
@@ -193,6 +260,87 @@ class DeleterTest extends TestCase
         $oLogger->method('routine')->willReturnSelf();
 
         return new Context($bDryRun, $oLogger, 'Tests\\Housekeeping\\Service\\DeleterTest');
+    }
+
+    /**
+     * Allows the first batch, then reports over budget.
+     *
+     * @param string[] $aLogs
+     */
+    private function stoppingContext(array &$aLogs): Context
+    {
+        $oLogger = $this->createStub(Logger::class);
+        $oLogger->method('routine')->willReturnCallback(
+            function (string $sClass, string $sMessage) use (&$aLogs, $oLogger): Logger {
+                $aLogs[] = $sMessage;
+                return $oLogger;
+            }
+        );
+
+        return new class (false, $oLogger, 'Tests\\Housekeeping\\Service\\DeleterTest') extends Context {
+            private int $iChecks = 0;
+
+            public function shouldStop(): bool
+            {
+                $this->iChecks++;
+                return $this->iChecks > 2;
+            }
+        };
+    }
+
+    /**
+     * @param list<object{id: int}> $aRows
+     * @param int[]                 $aPages captured last-id of each getAll()
+     *
+     * @return ModelBase&MockObject
+     */
+    private function rowModel(array $aRows, array &$aPages): ModelBase
+    {
+        $oModel = $this->createMock(ModelBase::class);
+        $oModel->method('getColumnId')->willReturn('id');
+        $oModel->method('getTableName')->willReturn('nails_test');
+        $oModel->method('getAll')->willReturnCallback(
+            function (mixed $iPage, mixed $iPerPage, array $aData = []) use ($aRows, &$aPages): array {
+                self::assertSame(1, $iPage);
+                $iLastId  = $this->lastIdFromWhere($aData);
+                $aPages[] = $iLastId;
+                $aMatching = array_values(array_filter(
+                    $aRows,
+                    static fn (object $oRow): bool => $oRow->id > $iLastId
+                ));
+
+                return array_slice($aMatching, 0, (int) $iPerPage);
+            }
+        );
+
+        return $oModel;
+    }
+
+    /**
+     * @return list<object{id: int}>
+     */
+    private function rows(int ...$aIds): array
+    {
+        $aRows = [];
+        foreach ($aIds as $iId) {
+            $aRows[] = (object) ['id' => $iId];
+        }
+
+        return $aRows;
+    }
+
+    /**
+     * @param array<string, mixed> $aData
+     */
+    private function lastIdFromWhere(array $aData): int
+    {
+        foreach ($aData['where'] ?? [] as $aClause) {
+            if (is_array($aClause) && ($aClause[0] ?? '') === 'id >') {
+                return (int) $aClause[1];
+            }
+        }
+
+        self::fail('Expected an id > keyset clause');
     }
 
     private function writeFile(string $sName, string $sContents, int $iDaysAgo): string
