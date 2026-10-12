@@ -4,6 +4,8 @@ namespace Nails\Housekeeping\Service;
 
 use Cron\CronExpression;
 use DateTime;
+use DateTimeImmutable;
+use DateTimeInterface;
 use Exception;
 use Nails\Common\Exception\FactoryException;
 use Nails\Common\Exception\NailsException;
@@ -68,12 +70,14 @@ class Orchestrator
         bool $bForce = false,
         ?string $sRoutine = null,
     ): array {
-        /** @var Event $oEventService */
-        $oEventService = Factory::service('Event');
-        $oEventService->trigger(Events::HOUSEKEEPING_START, Events::getEventNamespace());
+        // One clock for the whole run. A slow routine must not push later
+        // minute-specific schedules past the minute this run started in.
+        $oNow = $this->referenceTime();
+
+        $this->trigger(Events::HOUSEKEEPING_START);
 
         $aRoutines = $this->discover();
-        $oEventService->trigger(Events::HOUSEKEEPING_READY, Events::getEventNamespace(), [$aRoutines]);
+        $this->trigger(Events::HOUSEKEEPING_READY, [$aRoutines]);
 
         $oOutput?->writeln(sprintf('Discovered <info>%d</info> routine(s)', count($aRoutines)));
 
@@ -89,7 +93,7 @@ class Orchestrator
         foreach ($aRoutines as $oRoutine) {
             $sClass = $oRoutine->getKey();
 
-            if (!$bForce && $sRoutine === null && !$this->isDue($oRoutine, $oOutput)) {
+            if (!$bForce && $sRoutine === null && !$this->isDue($oRoutine, $oOutput, $oNow)) {
                 continue;
             }
 
@@ -101,7 +105,7 @@ class Orchestrator
             $aResults[$sClass] = $this->executeRoutine($oRoutine, $bDryRun, $oOutput);
         }
 
-        $oEventService->trigger(Events::HOUSEKEEPING_FINISH, Events::getEventNamespace());
+        $this->trigger(Events::HOUSEKEEPING_FINISH);
 
         return $aResults;
     }
@@ -139,13 +143,9 @@ class Orchestrator
     ): Result {
         $sClass = $oRoutine->getKey();
 
-        /** @var Event $oEventService */
-        $oEventService = Factory::service('Event');
-        $oEventService->trigger(Events::HOUSEKEEPING_ROUTINE_BEFORE, Events::getEventNamespace(), [$oRoutine]);
+        $this->trigger(Events::HOUSEKEEPING_ROUTINE_BEFORE, [$oRoutine]);
 
-        /** @var Logger $oLogger */
-        $oLogger = Factory::service('Logger', Constants::MODULE_SLUG);
-        $oContext = new Context($bDryRun, $oLogger, $sClass, $oOutput);
+        $oContext = new Context($bDryRun, $this->logger(), $sClass, $oOutput);
 
         $oOutput?->writeln('');
         $oOutput?->writeln(sprintf('Running <info>%s</info>', $sClass));
@@ -182,11 +182,7 @@ class Orchestrator
                 $this->stampLastRun($sClass, $oResult, $iDurationMs, $bDryRun);
             }
 
-            $oEventService->trigger(
-                Events::HOUSEKEEPING_ROUTINE_AFTER,
-                Events::getEventNamespace(),
-                [$oRoutine, $oResult]
-            );
+            $this->trigger(Events::HOUSEKEEPING_ROUTINE_AFTER, [$oRoutine, $oResult]);
 
             return $oResult;
 
@@ -196,11 +192,7 @@ class Orchestrator
             $oContext->log('FINISH');
             $oOutput?->writeln('<error>' . $e->getMessage() . '</error>');
 
-            $oEventService->trigger(
-                Events::HOUSEKEEPING_ROUTINE_ERROR,
-                Events::getEventNamespace(),
-                [$oRoutine, $e]
-            );
+            $this->trigger(Events::HOUSEKEEPING_ROUTINE_ERROR, [$oRoutine, $e]);
 
             /** @var ErrorHandler $oErrorHandlerService */
             $oErrorHandlerService = Factory::service('ErrorHandler');
@@ -223,7 +215,11 @@ class Orchestrator
      */
     public function getLastRun(string $sClass): ?array
     {
-        $mValue = appSetting($this->lastRunKey($sClass), Constants::MODULE_SLUG);
+        $mValue = $this->readLastRunSetting($sClass);
+        // App settings come back as JSON objects, not arrays.
+        if (is_object($mValue)) {
+            $mValue = get_object_vars($mValue);
+        }
         if (!is_array($mValue) || !isset($mValue['at'], $mValue['processed'], $mValue['failed'], $mValue['success'], $mValue['duration_ms'], $mValue['dry_run'])) {
             return null;
         }
@@ -270,10 +266,20 @@ class Orchestrator
     }
 
     /**
+     * Whether $oRoutine should run at $oNow.
+     *
+     * Pass the reference time captured at the start of a run so every routine is
+     * judged against the same minute. When $oNow is omitted, the current minute is used.
+     *
+     * A routine is due when it has no completed real run, or when its latest scheduled
+     * time (including the reference minute, when that minute matches) is later than
+     * that run. Dry-run stamps are ignored. Disabled routines and environment
+     * mismatches are not due.
+     *
      * @throws RoutineMisconfiguredException
      * @throws FactoryException
      */
-    public function isDue(Routine $oRoutine, ?OutputInterface $oOutput = null): bool
+    public function isDue(Routine $oRoutine, ?OutputInterface $oOutput = null, ?DateTimeInterface $oNow = null): bool
     {
         $sExpression = $oRoutine->getCronExpression();
         if ($sExpression === '') {
@@ -306,27 +312,101 @@ class Orchestrator
             return false;
         }
 
-        /** @var DateTime $oNow */
-        $oNow        = Factory::factory('DateTime');
+        $oNow        = $this->minute($oNow ?? $this->referenceTime());
         $oExpression = CronExpression::factory($sExpression);
+        $oScheduled  = DateTimeImmutable::createFromInterface(
+            $oExpression->getPreviousRunDate($oNow, 0, true)
+        );
 
-        if (!$oExpression->isDue($oNow)) {
-            return false;
+        $aLastRun = $this->getLastRun($oRoutine->getKey());
+        if ($aLastRun === null || $aLastRun['dry_run']) {
+            return true;
         }
 
-        return true;
+        $oLastRun = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $aLastRun['at'], $oNow->getTimezone());
+        if ($oLastRun === false) {
+            return true;
+        }
+
+        return $oScheduled->getTimestamp() > $oLastRun->getTimestamp();
     }
 
-    private function stampLastRun(string $sClass, Result $oResult, int $iDurationMs, bool $bDryRun): void
+    /**
+     * @throws FactoryException
+     */
+    protected function now(): DateTimeInterface
     {
         /** @var DateTime $oNow */
         $oNow = Factory::factory('DateTime');
 
+        return $oNow;
+    }
+
+    /**
+     * @throws FactoryException
+     */
+    protected function referenceTime(): DateTimeInterface
+    {
+        return $this->minute($this->now());
+    }
+
+    private function minute(DateTimeInterface $oNow): DateTimeImmutable
+    {
+        return DateTimeImmutable::createFromInterface($oNow)->setTime(
+            (int) $oNow->format('H'),
+            (int) $oNow->format('i'),
+            0
+        );
+    }
+
+    /**
+     * @param mixed[] $aPayload
+     *
+     * @throws FactoryException
+     * @throws NailsException
+     * @throws ReflectionException
+     */
+    protected function trigger(string $sEvent, array $aPayload = []): void
+    {
+        /** @var Event $oEventService */
+        $oEventService = Factory::service('Event');
+        $oEventService->trigger($sEvent, Events::getEventNamespace(), $aPayload);
+    }
+
+    /**
+     * @throws FactoryException
+     */
+    protected function logger(): Logger
+    {
+        /** @var Logger $oLogger */
+        $oLogger = Factory::service('Logger', Constants::MODULE_SLUG);
+
+        return $oLogger;
+    }
+
+    protected function readLastRunSetting(string $sClass): mixed
+    {
+        return appSetting($this->lastRunKey($sClass), Constants::MODULE_SLUG);
+    }
+
+    /**
+     * @param array{at: string, processed: int, failed: int, success: bool, duration_ms: int, dry_run: bool} $aValue
+     */
+    protected function writeLastRunSetting(string $sClass, array $aValue): void
+    {
         setAppSetting(
             $this->lastRunKey($sClass),
             Constants::MODULE_SLUG,
+            $aValue
+        );
+    }
+
+    private function stampLastRun(string $sClass, Result $oResult, int $iDurationMs, bool $bDryRun): void
+    {
+        $this->writeLastRunSetting(
+            $sClass,
             [
-                'at'          => $oNow->format('Y-m-d H:i:s'),
+                'at'          => $this->now()->format('Y-m-d H:i:s'),
                 'processed'   => $oResult->getProcessed(),
                 'failed'      => $oResult->getFailed(),
                 'success'     => $oResult->isSuccess(),
