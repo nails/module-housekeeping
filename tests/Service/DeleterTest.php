@@ -6,6 +6,7 @@ use Nails\Common\Model\Base as ModelBase;
 use Nails\Housekeeping\Exception\HousekeepingException;
 use Nails\Housekeeping\Housekeeping\LogFiles;
 use Nails\Housekeeping\Housekeeping\LogFilesArchive;
+use Nails\Housekeeping\Log\Threshold;
 use Nails\Housekeeping\Routine\Context;
 use Nails\Housekeeping\Service\Deleter;
 use Nails\Housekeeping\Service\Logger;
@@ -173,6 +174,47 @@ class DeleterTest extends TestCase
         self::assertFileExists($sOld);
     }
 
+    public function test_delete_files_zero_removes_every_matching_file(): void
+    {
+        $sRecent = $this->writeFile('log-2026-09-15.php', "recent\n", 1);
+
+        $oResult = $this->deleter()->deleteFiles(
+            $this->context(),
+            $this->sDir,
+            '*.php',
+            0
+        );
+
+        self::assertTrue($oResult->isSuccess());
+        self::assertSame(1, $oResult->getProcessed());
+        self::assertFileDoesNotExist($sRecent);
+    }
+
+    public function test_threshold_callback_skips_a_disabled_file_and_logs_the_channel(): void
+    {
+        $sCron = $this->writeFile('cron-2020-01-01.php', "old\n", 400);
+        $sApi  = $this->writeFile('api-2020-01-01.php', "old\n", 400);
+        $aLogs = [];
+
+        $oResult = $this->deleter()->deleteFiles(
+            $this->capturingContext($aLogs),
+            $this->sDir,
+            ['*.php', '*.php.gz'],
+            90,
+            fn (\SplFileInfo $oFile): Threshold => new Threshold(
+                str_starts_with($oFile->getFilename(), 'cron-') ? 'cron' : 'api',
+                str_starts_with($oFile->getFilename(), 'cron-') ? 0 : 30
+            )
+        );
+
+        self::assertTrue($oResult->isSuccess());
+        self::assertSame(1, $oResult->getProcessed());
+        self::assertFileExists($sCron);
+        self::assertFileDoesNotExist($sApi);
+        self::assertContains('CHANNEL cron older_than_days=0 processed=0 dry_run=false', $aLogs);
+        self::assertContains('CHANNEL api older_than_days=30 processed=1 dry_run=false', $aLogs);
+    }
+
     public function test_file_method_defaults_follow_the_log_routines(): void
     {
         $oDelete  = new \ReflectionMethod(Deleter::class, 'deleteFiles');
@@ -280,6 +322,22 @@ class DeleterTest extends TestCase
     private function deleter(): TestableDeleter
     {
         return new TestableDeleter($this->oNow);
+    }
+
+    /**
+     * @param string[] $aLogs
+     */
+    private function capturingContext(array &$aLogs, bool $bDryRun = false): Context
+    {
+        $oLogger = $this->createStub(Logger::class);
+        $oLogger->method('routine')->willReturnCallback(
+            function (string $sClass, string $sMessage) use (&$aLogs, $oLogger): Logger {
+                $aLogs[] = $sMessage;
+                return $oLogger;
+            }
+        );
+
+        return new Context($bDryRun, $oLogger, 'Tests\\Housekeeping\\Service\\DeleterTest');
     }
 
     private function context(bool $bDryRun = false): Context

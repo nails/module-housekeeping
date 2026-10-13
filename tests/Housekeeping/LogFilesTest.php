@@ -7,6 +7,7 @@ use Nails\Housekeeping\Housekeeping\LogFiles;
 use Nails\Housekeeping\Housekeeping\LogFilesArchive;
 use Nails\Housekeeping\Routine\Context;
 use Nails\Housekeeping\Routine\Result;
+use Nails\Housekeeping\Service\Deleter;
 use Nails\Housekeeping\Service\Logger;
 use PHPUnit\Framework\TestCase;
 
@@ -50,29 +51,63 @@ class LogFilesArchiveHarness extends LogFilesArchive
 
 class LogFilesDirHarness extends LogFiles
 {
-    const CONFIG_RETENTION_DAYS = 'LOG_RETENTION_TEST_ZERO';
-
-    public function __construct(private readonly string $sDirectory)
-    {
+    public function __construct(
+        private readonly string $sDirectory,
+        private readonly Deleter $oDeleter,
+        private readonly string $sConfigKey,
+    ) {
     }
 
     protected function directory(): string
     {
         return $this->sDirectory;
+    }
+
+    protected function deleter(): Deleter
+    {
+        return $this->oDeleter;
+    }
+
+    protected function retentionKey(): string
+    {
+        return $this->sConfigKey;
     }
 }
 
 class LogFilesArchiveDirHarness extends LogFilesArchive
 {
-    const CONFIG_ARCHIVE_DAYS = 'LOG_ARCHIVE_TEST_ZERO';
-
-    public function __construct(private readonly string $sDirectory)
-    {
+    public function __construct(
+        private readonly string $sDirectory,
+        private readonly Deleter $oDeleter,
+        private readonly string $sConfigKey,
+    ) {
     }
 
     protected function directory(): string
     {
         return $this->sDirectory;
+    }
+
+    protected function deleter(): Deleter
+    {
+        return $this->oDeleter;
+    }
+
+    protected function archiveKey(): string
+    {
+        return $this->sConfigKey;
+    }
+}
+
+class FixedClockDeleter extends Deleter
+{
+    public function __construct(private readonly \DateTime $oNow)
+    {
+    }
+
+    protected function now(): \DateTime
+    {
+        return clone $this->oNow;
     }
 }
 
@@ -128,44 +163,132 @@ class LogFilesTest extends TestCase
 
     public function test_log_retention_zero_deletes_nothing(): void
     {
+        $sKey  = 'LOG_RETENTION_TEST_ZERO';
         $sDir  = $this->makeDir();
-        $sFile = $sDir . DIRECTORY_SEPARATOR . 'log-old.php';
-        file_put_contents($sFile, "old\n");
-        touch($sFile, time() - (400 * 86400));
+        $sFile = $this->write($sDir, 'log-old.php', 400);
+        Config::set($sKey, 0);
 
-        Config::set(LogFilesDirHarness::CONFIG_RETENTION_DAYS, 0);
-
-        $aLogs    = [];
-        $oContext = $this->context($aLogs, LogFilesDirHarness::class);
-        $oResult  = (new LogFilesDirHarness($sDir))->execute($oContext);
+        $aLogs   = [];
+        $oResult = (new LogFilesDirHarness($sDir, $this->deleter(), $sKey))
+            ->execute($this->context($aLogs, LogFilesDirHarness::class));
 
         self::assertTrue($oResult->isSuccess());
         self::assertSame(0, $oResult->getProcessed());
-        self::assertSame('Log retention disabled', $oResult->getMessage());
         self::assertFileExists($sFile);
-        self::assertContains('DISABLED ' . LogFilesDirHarness::CONFIG_RETENTION_DAYS . '=0', $aLogs);
+        self::assertContains('CHANNEL * older_than_days=0 processed=0 dry_run=false', $aLogs);
+    }
+
+    public function test_channel_zero_disables_only_that_channel(): void
+    {
+        $sKey = 'LOG_RETENTION_TEST_CHANNEL_ONLY';
+        Config::set($sKey, 90);
+        Config::set($sKey . '_CRON', 0);
+
+        $sDir  = $this->makeDir();
+        $sCron = $this->write($sDir, 'cron-2020-01-01.php', 400);
+        $sApi  = $this->write($sDir, 'api-2020-01-01.php', 400);
+
+        $aLogs   = [];
+        $oResult = (new LogFilesDirHarness($sDir, $this->deleter(), $sKey))
+            ->execute($this->context($aLogs, LogFilesDirHarness::class));
+
+        self::assertTrue($oResult->isSuccess());
+        self::assertSame(1, $oResult->getProcessed());
+        self::assertFileExists($sCron);
+        self::assertFileDoesNotExist($sApi);
+        self::assertContains('CHANNEL cron older_than_days=0 processed=0 dry_run=false', $aLogs);
+        self::assertContains('CHANNEL api older_than_days=90 processed=1 dry_run=false', $aLogs);
+    }
+
+    public function test_channel_override_still_deletes_when_catch_all_is_disabled(): void
+    {
+        $sKey = 'LOG_RETENTION_TEST_CATCHALL_OFF';
+        Config::set($sKey, 0);
+        Config::set($sKey . '_CRON', 30);
+
+        $sDir   = $this->makeDir();
+        $sCron  = $this->write($sDir, 'cron-2020-01-01.php', 400);
+        $sApi   = $this->write($sDir, 'api-2020-01-01.php', 400);
+        $sNotes = $this->write($sDir, 'notes.php', 400);
+
+        $aLogs   = [];
+        $oResult = (new LogFilesDirHarness($sDir, $this->deleter(), $sKey))
+            ->execute($this->context($aLogs, LogFilesDirHarness::class));
+
+        self::assertTrue($oResult->isSuccess());
+        self::assertSame(1, $oResult->getProcessed());
+        self::assertFileDoesNotExist($sCron);
+        self::assertFileExists($sApi);
+        self::assertFileExists($sNotes);
+        self::assertContains('CHANNEL cron older_than_days=30 processed=1 dry_run=false', $aLogs);
+        self::assertContains('CHANNEL api older_than_days=0 processed=0 dry_run=false', $aLogs);
+        self::assertContains('CHANNEL * older_than_days=0 processed=0 dry_run=false', $aLogs);
+    }
+
+    public function test_hyphenated_channel_and_gzip_use_the_channel_key(): void
+    {
+        $sKey = 'LOG_RETENTION_TEST_HYPHEN';
+        Config::set($sKey, 9999);
+        Config::set($sKey . '_CDN_ISSUES', 30);
+        Config::set($sKey . '_CRON', 30);
+
+        $sDir    = $this->makeDir();
+        $sIssues = $this->write($sDir, 'cdn-issues-2025-10-16-10-42-07.php', 400);
+        $sGzip   = $this->write($sDir, 'cron-2020-01-01.php.gz', 400);
+        $sPlain  = $this->write($sDir, 'cron-2020-01-02.php', 400);
+        $sApi    = $this->write($sDir, 'api-2020-01-01.php.gz', 400);
+
+        $aLogs   = [];
+        $oResult = (new LogFilesDirHarness($sDir, $this->deleter(), $sKey))
+            ->execute($this->context($aLogs, LogFilesDirHarness::class));
+
+        self::assertTrue($oResult->isSuccess());
+        self::assertSame(3, $oResult->getProcessed());
+        self::assertFileDoesNotExist($sIssues);
+        self::assertFileDoesNotExist($sGzip);
+        self::assertFileDoesNotExist($sPlain);
+        self::assertFileExists($sApi);
+        self::assertContains('CHANNEL cdn-issues older_than_days=30 processed=1 dry_run=false', $aLogs);
+        self::assertContains('CHANNEL cron older_than_days=30 processed=2 dry_run=false', $aLogs);
+        self::assertContains('CHANNEL api older_than_days=9999 processed=0 dry_run=false', $aLogs);
+    }
+
+    public function test_dry_run_reports_channel_decisions_without_deleting(): void
+    {
+        $sKey = 'LOG_RETENTION_TEST_DRY';
+        Config::set($sKey, 90);
+        Config::set($sKey . '_CRON', 30);
+
+        $sDir  = $this->makeDir();
+        $sCron = $this->write($sDir, 'cron-2020-01-01.php', 400);
+
+        $aLogs   = [];
+        $oResult = (new LogFilesDirHarness($sDir, $this->deleter(), $sKey))
+            ->execute($this->context($aLogs, LogFilesDirHarness::class, true));
+
+        self::assertTrue($oResult->isSuccess());
+        self::assertSame(1, $oResult->getProcessed());
+        self::assertFileExists($sCron);
+        self::assertContains('CHANNEL cron older_than_days=30 processed=1 dry_run=true', $aLogs);
     }
 
     public function test_log_files_archive_zero_disables_without_touching_files(): void
     {
+        $sKey  = 'LOG_ARCHIVE_TEST_ZERO';
         $sDir  = $this->makeDir();
-        $sFile = $sDir . DIRECTORY_SEPARATOR . 'log-old.php';
-        file_put_contents($sFile, "old\n");
-        touch($sFile, time() - (40 * 86400));
+        $sFile = $this->write($sDir, 'log-old.php', 40);
+        Config::set($sKey, 0);
 
-        Config::set(LogFilesArchiveDirHarness::CONFIG_ARCHIVE_DAYS, 0);
-
-        $aLogs    = [];
-        $oContext = $this->context($aLogs, LogFilesArchiveDirHarness::class);
-        $oResult  = (new LogFilesArchiveDirHarness($sDir))->execute($oContext);
+        $aLogs   = [];
+        $oResult = (new LogFilesArchiveDirHarness($sDir, $this->deleter(), $sKey))
+            ->execute($this->context($aLogs, LogFilesArchiveDirHarness::class));
 
         self::assertInstanceOf(Result::class, $oResult);
         self::assertTrue($oResult->isSuccess());
         self::assertSame(0, $oResult->getProcessed());
-        self::assertSame('Log archive disabled', $oResult->getMessage());
         self::assertFileExists($sFile);
         self::assertFileDoesNotExist($sFile . '.gz');
-        self::assertContains('DISABLED ' . LogFilesArchiveDirHarness::CONFIG_ARCHIVE_DAYS . '=0', $aLogs);
+        self::assertContains('CHANNEL * older_than_days=0 processed=0 dry_run=false', $aLogs);
     }
 
     public function test_purge_runs_before_archive_by_class_name(): void
@@ -176,7 +299,7 @@ class LogFilesTest extends TestCase
     /**
      * @param string[] $aLogs
      */
-    private function context(array &$aLogs, string $sRoutineClass): Context
+    private function context(array &$aLogs, string $sRoutineClass, bool $bDryRun = false): Context
     {
         $oLogger = $this->createStub(Logger::class);
         $oLogger->method('routine')->willReturnCallback(
@@ -186,7 +309,21 @@ class LogFilesTest extends TestCase
             }
         );
 
-        return new Context(false, $oLogger, $sRoutineClass);
+        return new Context($bDryRun, $oLogger, $sRoutineClass);
+    }
+
+    private function deleter(): FixedClockDeleter
+    {
+        return new FixedClockDeleter(new \DateTime('2026-09-16 12:00:00'));
+    }
+
+    private function write(string $sDir, string $sName, int $iDaysAgo): string
+    {
+        $sPath = $sDir . DIRECTORY_SEPARATOR . $sName;
+        file_put_contents($sPath, "log\n");
+        touch($sPath, (new \DateTime('2026-09-16 12:00:00'))->getTimestamp() - ($iDaysAgo * 86400));
+
+        return $sPath;
     }
 
     private function makeDir(): string
