@@ -8,6 +8,8 @@ use Nails\Common\Model\Base as ModelBase;
 use Nails\Common\Service\Database;
 use Nails\Factory;
 use Nails\Housekeeping\Exception\HousekeepingException;
+use Nails\Housekeeping\Housekeeping\LogFiles;
+use Nails\Housekeeping\Housekeeping\LogFilesArchive;
 use Nails\Housekeeping\Routine\Context;
 use Nails\Housekeeping\Routine\Result;
 use RecursiveDirectoryIterator;
@@ -119,7 +121,7 @@ class Deleter
         Context $oContext,
         string $sDirectory,
         string|array $mPattern = '*.php',
-        int $iOlderThanDays = 180,
+        int $iOlderThanDays = LogFiles::DEFAULT_RETENTION_DAYS,
     ): Result {
         $sDirectory = $this->normaliseDirectory($sDirectory);
         $sPattern   = $this->patternLabel($mPattern);
@@ -194,7 +196,7 @@ class Deleter
         Context $oContext,
         string $sDirectory,
         string|array $mPattern = '*.php',
-        int $iOlderThanDays = 14,
+        int $iOlderThanDays = LogFilesArchive::DEFAULT_ARCHIVE_DAYS,
         string $sSuffix = '.gz',
     ): Result {
         if (!function_exists('gzopen')) {
