@@ -5,6 +5,7 @@ namespace Tests\Housekeeping\Service;
 use DateTimeImmutable;
 use DateTimeInterface;
 use Nails\Housekeeping\Routine\Base;
+use Symfony\Component\Console\Output\BufferedOutput;
 use Nails\Housekeeping\Routine\Context;
 use Nails\Housekeeping\Routine\Result;
 use Nails\Housekeeping\Service\Logger;
@@ -330,5 +331,34 @@ class OrchestratorScheduleTest extends TestCase
 
         $oOrchestrator->run(null, false, true, FollowingRoutine::class);
         self::assertSame(1, $oRoutine->iExecutions);
+    }
+
+    public function test_nothing_due_writes_no_discovery_line(): void
+    {
+        $oRoutine = new ScheduleRoutine('0 0 1 1 *');
+        $oOrchestrator = ClockOrchestrator::at('2026-06-15 12:00:00', [$oRoutine]);
+        $oOrchestrator->remember($oRoutine, '2026-01-01 00:00:00');
+        $oOutput = new BufferedOutput();
+
+        $aResults = $oOrchestrator->run($oOutput);
+
+        self::assertSame([], $aResults);
+        self::assertSame(0, $oRoutine->iExecutions);
+        self::assertStringNotContainsString('Discovered', $oOutput->fetch());
+        self::assertFalse($oOrchestrator->hasDueWork());
+    }
+
+    public function test_a_due_routine_still_logs_discovery_and_runs(): void
+    {
+        $oRoutine = new ScheduleRoutine('* * * * *');
+        $oOrchestrator = ClockOrchestrator::at('2026-06-15 12:00:00', [$oRoutine]);
+        $oOrchestrator->remember($oRoutine, '2026-06-15 11:59:00');
+        $oOutput = new BufferedOutput();
+
+        $aResults = $oOrchestrator->run($oOutput);
+
+        self::assertArrayHasKey(ScheduleRoutine::class, $aResults);
+        self::assertSame(1, $oRoutine->iExecutions);
+        self::assertStringContainsString('Discovered', $oOutput->fetch());
     }
 }
