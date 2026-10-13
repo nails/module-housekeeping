@@ -6,6 +6,7 @@ use Nails\Common\Exception\FactoryException;
 use Nails\Common\Exception\NailsException;
 use Nails\Console\Command\Base;
 use Nails\Factory;
+use Nails\Housekeeping\Console\RunAnnouncement;
 use Nails\Housekeeping\Constants;
 use Nails\Housekeeping\Service\Orchestrator;
 use ReflectionException;
@@ -49,16 +50,26 @@ class Run extends Base
     {
         parent::execute($oInput, $oOutput);
 
-        $this->banner('Housekeeping: Run');
+        $bDryRun  = (bool) $oInput->getOption('dry-run');
+        $bForce   = (bool) $oInput->getOption('force');
+        $sRoutine = $oInput->getOption('routine') ? (string) $oInput->getOption('routine') : null;
 
         /** @var Orchestrator $oOrchestrator */
         $oOrchestrator = Factory::service('Orchestrator', Constants::MODULE_SLUG);
 
+        if (!RunAnnouncement::visible($bForce, $sRoutine, $oOrchestrator->hasDueWork())) {
+            $oOrchestrator->run($oOutput, $bDryRun, $bForce, $sRoutine);
+
+            return static::EXIT_CODE_SUCCESS;
+        }
+
+        $this->banner('Housekeeping: Run');
+
         $aResults = $oOrchestrator->run(
             $oOutput,
-            (bool) $oInput->getOption('dry-run'),
-            (bool) $oInput->getOption('force'),
-            $oInput->getOption('routine') ? (string) $oInput->getOption('routine') : null
+            $bDryRun,
+            $bForce,
+            $sRoutine
         );
 
         $oOutput->writeln('');

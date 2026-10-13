@@ -10,4 +10,5 @@ class Run extends Base
     const CRON_EXPRESSION = '* * * * *';
     const CONSOLE_COMMAND = 'housekeeping:run';
     const MAX_PROCESSES   = 1;
+    const LOG_OUTPUT      = false;
 }

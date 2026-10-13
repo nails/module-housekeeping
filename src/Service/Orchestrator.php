@@ -79,14 +79,20 @@ class Orchestrator
         $aRoutines = $this->discover();
         $this->trigger(Events::HOUSEKEEPING_READY, [$aRoutines]);
 
-        $oOutput?->writeln(sprintf('Discovered <info>%d</info> routine(s)', count($aRoutines)));
-
         if ($sRoutine !== null) {
             $aRoutines = $this->filterByName($aRoutines, $sRoutine);
             if (empty($aRoutines)) {
                 throw new HousekeepingException(sprintf('No housekeeping routine matched "%s"', $sRoutine));
             }
         }
+
+        if (!$bForce && $sRoutine === null && !$this->anyDue($aRoutines, $oNow)) {
+            $this->trigger(Events::HOUSEKEEPING_FINISH);
+
+            return [];
+        }
+
+        $oOutput?->writeln(sprintf('Discovered <info>%d</info> routine(s)', count($aRoutines)));
 
         $aResults = [];
 
@@ -108,6 +114,32 @@ class Orchestrator
         $this->trigger(Events::HOUSEKEEPING_FINISH);
 
         return $aResults;
+    }
+
+    /**
+     * True when at least one discovered routine would run on a normal minute.
+     *
+     * @throws FactoryException
+     * @throws NailsException
+     * @throws ReflectionException
+     */
+    public function hasDueWork(): bool
+    {
+        return $this->anyDue($this->discover(), $this->referenceTime());
+    }
+
+    /**
+     * @param Routine[] $aRoutines
+     */
+    private function anyDue(array $aRoutines, DateTimeInterface $oNow): bool
+    {
+        foreach ($aRoutines as $oRoutine) {
+            if ($this->isDue($oRoutine, null, $oNow)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
