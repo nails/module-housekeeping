@@ -4,6 +4,8 @@ namespace Tests\Housekeeping\Service;
 
 use Nails\Common\Model\Base as ModelBase;
 use Nails\Housekeeping\Exception\HousekeepingException;
+use Nails\Housekeeping\Housekeeping\LogFiles;
+use Nails\Housekeeping\Housekeeping\LogFilesArchive;
 use Nails\Housekeeping\Routine\Context;
 use Nails\Housekeeping\Service\Deleter;
 use Nails\Housekeeping\Service\Logger;
@@ -171,6 +173,21 @@ class DeleterTest extends TestCase
         self::assertFileExists($sOld);
     }
 
+    public function test_file_method_defaults_follow_the_log_routines(): void
+    {
+        $oDelete  = new \ReflectionMethod(Deleter::class, 'deleteFiles');
+        $oArchive = new \ReflectionMethod(Deleter::class, 'archiveFiles');
+
+        self::assertSame(
+            LogFiles::DEFAULT_RETENTION_DAYS,
+            $this->defaultFor($oDelete, 'iOlderThanDays')
+        );
+        self::assertSame(
+            LogFilesArchive::DEFAULT_ARCHIVE_DAYS,
+            $this->defaultFor($oArchive, 'iOlderThanDays')
+        );
+    }
+
     public function test_missing_directory_throws(): void
     {
         $this->expectException(HousekeepingException::class);
@@ -247,6 +264,17 @@ class DeleterTest extends TestCase
         self::assertSame('Routine exceeded time budget', $oResult->getMessage());
         self::assertContains('ABORTED', $aLogs);
         self::assertSame([0, 2], $aPages);
+    }
+
+    private function defaultFor(\ReflectionMethod $oMethod, string $sName): mixed
+    {
+        foreach ($oMethod->getParameters() as $oParam) {
+            if ($oParam->getName() === $sName) {
+                return $oParam->getDefaultValue();
+            }
+        }
+
+        self::fail('Parameter ' . $sName . ' not found on ' . $oMethod->getName());
     }
 
     private function deleter(): TestableDeleter
