@@ -20,7 +20,7 @@ class LogFilesArchive extends Base
     const DESCRIPTION          = 'Compresses log files older than the configured archive threshold';
     const CRON_EXPRESSION      = '0 0 * * *';
     const CONFIG_ARCHIVE_DAYS  = 'LOG_ARCHIVE';
-    const DEFAULT_ARCHIVE_DAYS = 14;
+    const DEFAULT_ARCHIVE_DAYS = 7;
 
     protected function directory(): string
     {
