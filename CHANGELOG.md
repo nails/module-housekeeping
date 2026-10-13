@@ -6,5 +6,6 @@
 
 - `LOG_ARCHIVE` default is 7 days (was 14).
 - `LOG_RETENTION` default is 90 days (was 180).
-- `LOG_RETENTION=0` (or any value below 1) disables deletion and logs `DISABLED LOG_RETENTION=0`. It previously deleted every matching log. There is no setting that means "delete every log".
-- `LOG_ARCHIVE=0` still disables compression.
+- `LOG_RETENTION=0` (or any value below 1) keeps logs that do not have their own positive channel threshold. It previously deleted every matching log. There is no setting that means "delete every log".
+- `LOG_ARCHIVE=0` disables compression for files that do not have their own positive channel threshold.
+- Per-channel keys `LOG_RETENTION_<CHANNEL>` and `LOG_ARCHIVE_<CHANNEL>` override the catch-all for that file. The channel is the filename before the date (`cron-2026-01-01.php` → `CRON`, `cdn-issues-2025-10-16-10-42-07.php` → `CDN_ISSUES`). A value below 1 disables that channel only, so `LOG_RETENTION_CRON=30` still deletes cron logs when `LOG_RETENTION=0`.

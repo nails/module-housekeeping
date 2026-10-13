@@ -10,6 +10,7 @@ use Nails\Factory;
 use Nails\Housekeeping\Exception\HousekeepingException;
 use Nails\Housekeeping\Housekeeping\LogFiles;
 use Nails\Housekeeping\Housekeeping\LogFilesArchive;
+use Nails\Housekeeping\Log\Threshold;
 use Nails\Housekeeping\Routine\Context;
 use Nails\Housekeeping\Routine\Result;
 use RecursiveDirectoryIterator;
@@ -112,7 +113,8 @@ class Deleter
     /**
      * Delete files matching a glob under a directory that are older than N days.
      *
-     * @param string|string[] $mPattern
+     * @param string|string[]                              $mPattern
+     * @param null|callable(SplFileInfo): Threshold       $cThreshold When set, each file supplies its own day count. A count below 1 skips that file. The single $iOlderThanDays value is used only when this is null, where 0 still means every matching file.
      *
      * @throws FactoryException
      * @throws HousekeepingException
@@ -122,31 +124,35 @@ class Deleter
         string $sDirectory,
         string|array $mPattern = '*.php',
         int $iOlderThanDays = LogFiles::DEFAULT_RETENTION_DAYS,
+        ?callable $cThreshold = null,
     ): Result {
         $sDirectory = $this->normaliseDirectory($sDirectory);
         $sPattern   = $this->patternLabel($mPattern);
+        $sOlder     = $this->olderThanLabel($iOlderThanDays, $cThreshold);
 
         $oContext
             ->writeln(sprintf(
-                'Cleaning <comment>%s</comment> (pattern <comment>%s</comment>, older than <comment>%d</comment> days)',
+                'Cleaning <comment>%s</comment> (pattern <comment>%s</comment>, older than <comment>%s</comment> days)',
                 $sDirectory,
                 $sPattern,
-                $iOlderThanDays
+                $sOlder
             ))
             ->log(sprintf(
-                'DIRECTORY %s pattern=%s older_than_days=%d dry_run=%s',
+                'DIRECTORY %s pattern=%s older_than_days=%s dry_run=%s',
                 $sDirectory,
                 $sPattern,
-                $iOlderThanDays,
+                $sOlder,
                 $oContext->isDryRun() ? 'true' : 'false'
             ));
 
         $oNow       = $this->now();
         $iProcessed = 0;
         $iFailed    = 0;
+        $aChannels  = [];
 
         foreach ($this->files($sDirectory) as $oFile) {
-            if (!$this->shouldProcessFile($oFile, $mPattern, $iOlderThanDays, $oNow)) {
+            $oThreshold = $this->matchThreshold($oFile, $mPattern, $iOlderThanDays, $cThreshold, $oNow, $aChannels);
+            if ($oThreshold === null) {
                 continue;
             }
 
@@ -165,7 +171,10 @@ class Deleter
             }
 
             $iProcessed++;
+            $this->markChannelProcessed($aChannels, $oThreshold);
         }
+
+        $this->logChannels($oContext, $cThreshold, $aChannels);
 
         $oContext->writeln(sprintf(
             '<comment>%s</comment> files %s',
@@ -187,7 +196,8 @@ class Deleter
      * sees the file's real age. Already-compressed files (those ending in the
      * suffix) are skipped.
      *
-     * @param string|string[] $mPattern
+     * @param string|string[]                        $mPattern
+     * @param null|callable(SplFileInfo): Threshold $cThreshold When set, each file supplies its own day count. A count below 1 skips that file. The single $iOlderThanDays value is used only when this is null, where 0 still means every matching file.
      *
      * @throws FactoryException
      * @throws HousekeepingException
@@ -198,6 +208,7 @@ class Deleter
         string|array $mPattern = '*.php',
         int $iOlderThanDays = LogFilesArchive::DEFAULT_ARCHIVE_DAYS,
         string $sSuffix = '.gz',
+        ?callable $cThreshold = null,
     ): Result {
         if (!function_exists('gzopen')) {
             throw new HousekeepingException('The zlib extension is required to archive files');
@@ -206,20 +217,21 @@ class Deleter
         $sDirectory = $this->normaliseDirectory($sDirectory);
         $sSuffix    = $this->normaliseSuffix($sSuffix);
         $sPattern   = $this->patternLabel($mPattern);
+        $sOlder     = $this->olderThanLabel($iOlderThanDays, $cThreshold);
 
         $oContext
             ->writeln(sprintf(
-                'Archiving <comment>%s</comment> (pattern <comment>%s</comment>, older than <comment>%d</comment> days, suffix <comment>%s</comment>)',
+                'Archiving <comment>%s</comment> (pattern <comment>%s</comment>, older than <comment>%s</comment> days, suffix <comment>%s</comment>)',
                 $sDirectory,
                 $sPattern,
-                $iOlderThanDays,
+                $sOlder,
                 $sSuffix
             ))
             ->log(sprintf(
-                'DIRECTORY %s pattern=%s older_than_days=%d suffix=%s dry_run=%s',
+                'DIRECTORY %s pattern=%s older_than_days=%s suffix=%s dry_run=%s',
                 $sDirectory,
                 $sPattern,
-                $iOlderThanDays,
+                $sOlder,
                 $sSuffix,
                 $oContext->isDryRun() ? 'true' : 'false'
             ));
@@ -227,6 +239,7 @@ class Deleter
         $oNow       = $this->now();
         $iProcessed = 0;
         $iFailed    = 0;
+        $aChannels  = [];
 
         foreach ($this->files($sDirectory) as $oFile) {
             $sFileName = $oFile->getFilename();
@@ -234,7 +247,8 @@ class Deleter
                 continue;
             }
 
-            if (!$this->shouldProcessFile($oFile, $mPattern, $iOlderThanDays, $oNow)) {
+            $oThreshold = $this->matchThreshold($oFile, $mPattern, $iOlderThanDays, $cThreshold, $oNow, $aChannels);
+            if ($oThreshold === null) {
                 continue;
             }
 
@@ -247,7 +261,10 @@ class Deleter
             }
 
             $iProcessed++;
+            $this->markChannelProcessed($aChannels, $oThreshold);
         }
+
+        $this->logChannels($oContext, $cThreshold, $aChannels);
 
         $oContext->writeln(sprintf(
             '<comment>%s</comment> files %s',
@@ -356,19 +373,48 @@ class Deleter
         }
     }
 
+    private function olderThanLabel(int $iOlderThanDays, ?callable $cThreshold): string
+    {
+        return $cThreshold === null ? (string) $iOlderThanDays : 'per-file';
+    }
+
     /**
-     * @param string|string[] $mPattern
+     * @param string|string[]                              $mPattern
+     * @param null|callable(SplFileInfo): Threshold       $cThreshold
+     * @param array<string, array{days: int, processed: int}> $aChannels
      */
-    private function shouldProcessFile(
+    private function matchThreshold(
         SplFileInfo $oFile,
         string|array $mPattern,
         int $iOlderThanDays,
+        ?callable $cThreshold,
         \DateTimeInterface $oNow,
-    ): bool {
+        array &$aChannels,
+    ): ?Threshold {
         if (!$this->filenameMatches($oFile->getFilename(), $mPattern)) {
-            return false;
+            return null;
         }
 
+        if ($cThreshold === null) {
+            if (!$this->isOlderThan($oFile, $iOlderThanDays, $oNow)) {
+                return null;
+            }
+
+            return new Threshold('', $iOlderThanDays);
+        }
+
+        $oThreshold = $cThreshold($oFile);
+        $this->noteChannel($aChannels, $oThreshold);
+
+        if ($oThreshold->days < 1 || !$this->isOlderThan($oFile, $oThreshold->days, $oNow)) {
+            return null;
+        }
+
+        return $oThreshold;
+    }
+
+    private function isOlderThan(SplFileInfo $oFile, int $iOlderThanDays, \DateTimeInterface $oNow): bool
+    {
         $oModified = \DateTime::createFromFormat('U', (string) $oFile->getMTime());
         if ($oModified === false) {
             return false;
@@ -379,6 +425,54 @@ class Deleter
         }
 
         return true;
+    }
+
+    /**
+     * @param array<string, array{days: int, processed: int}> $aChannels
+     */
+    private function noteChannel(array &$aChannels, Threshold $oThreshold): void
+    {
+        if (!isset($aChannels[$oThreshold->channel])) {
+            $aChannels[$oThreshold->channel] = ['days' => $oThreshold->days, 'processed' => 0];
+        }
+    }
+
+    /**
+     * @param array<string, array{days: int, processed: int}> $aChannels
+     */
+    private function markChannelProcessed(array &$aChannels, Threshold $oThreshold): void
+    {
+        if ($oThreshold->channel === '' || !isset($aChannels[$oThreshold->channel])) {
+            return;
+        }
+
+        $aChannels[$oThreshold->channel] = [
+            'days'      => $aChannels[$oThreshold->channel]['days'],
+            'processed' => $aChannels[$oThreshold->channel]['processed'] + 1,
+        ];
+    }
+
+    /**
+     * @param null|callable(SplFileInfo): Threshold           $cThreshold
+     * @param array<string, array{days: int, processed: int}> $aChannels
+     */
+    private function logChannels(Context $oContext, ?callable $cThreshold, array $aChannels): void
+    {
+        if ($cThreshold === null) {
+            return;
+        }
+
+        ksort($aChannels);
+        $sDryRun = $oContext->isDryRun() ? 'true' : 'false';
+        foreach ($aChannels as $sChannel => $aStats) {
+            $oContext->log(sprintf(
+                'CHANNEL %s older_than_days=%d processed=%d dry_run=%s',
+                $sChannel,
+                $aStats['days'],
+                $aStats['processed'],
+                $sDryRun
+            ));
+        }
     }
 
     /**
