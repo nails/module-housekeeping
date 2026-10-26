@@ -266,9 +266,13 @@ class Orchestrator
         ];
     }
 
+    /**
+     * The app setting `key` column is only 50 characters wide, so the class name
+     * is hashed to guarantee the key always fits ("last_run." + 32 = 41).
+     */
     public function lastRunKey(string $sClass): string
     {
-        return 'last_run.' . str_replace('\\', '.', $sClass);
+        return 'last_run.' . md5($sClass);
     }
 
     /**
